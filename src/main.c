@@ -39,9 +39,11 @@ void handleSignals();
 void initTables(float * mem1, float * mem2, float * freqTable, char** noteNameTable, float * notePitchTable);
 int initPortAudio(PaError * err, PaStreamParameters * inputParametersp, PaStream ** stream);
 void outputPitch(char* nearestNoteName, int nearestNoteDelta, float centsSharp);
-void listen(PaError * errp, PaStream * stream, float * data, float * mem1, float * mem2, float * a,
+int listen(PaError * errp, PaStream * stream, float * data, float * mem1, float * mem2, float * a,
    float * b, float * window, float * datai, float * freqTable, float * notePitchTable, 
-   char ** noteNameTable, void * fft, float * score, float * accuracy);
+   char ** noteNameTable, void * fft, float * score, int * numAccuratep);
+void updateInfo(float * scorep, int * numAccuratep, char * nearestNoteName, float centsSharp);
+void printResults(int numAccurate, float score, int numInputs);
 
 static bool running = true;
 
@@ -70,16 +72,16 @@ int main( int argc, char **argv ) {
    int result = initPortAudio(&err, &inputParameters, &stream);
    if(result) goto error; //If result is non-zero, something is wrong
 
-   float accuracy = 0.;
+   int numAccurate = 0;
    float score = 0.;
    waitForStart();
-   listen(&err, stream, data, mem1, mem2, a, b, window, datai, freqTable, notePitchTable,
-      noteNameTable, fft, &score, &accuracy);
+   int numInputs = listen(&err, stream, data, mem1, mem2, a, b, window, datai, freqTable, notePitchTable,
+      noteNameTable, fft, &score, &numAccurate);
 
    err = Pa_StopStream( stream );
    if( err != paNoError ) goto error;
 
-   printResults(accuracy, score);
+   printResults(numAccurate, score, numInputs);
 
    // cleanup
    destroyfft( fft );
@@ -92,15 +94,16 @@ int main( int argc, char **argv ) {
 }
 
 
-void printResults(float accuracy, float score){
-   printf("Accuracy: %f \n", accuracy);
-   printf("Score: %f / 100 \n", score);
+void printResults(int numAccurate, float score, int numInputs){
+   float percentAccurate = ((numAccurate * 1.0 )/numInputs) * 100;
+   printf("Percent accurate: %f %% \n", percentAccurate);
+   printf("Precision Score: %f / 100 \n", (score/numInputs));
 }
 
-//Listens to the microphone input and outputs the nearest pitch
-void listen(PaError * errp, PaStream * stream, float * data, float * mem1, float * mem2, float * a,
+//Listens to the microphone input and outputs the nearest pitch; returns number of inputs recorded
+int listen(PaError * errp, PaStream * stream, float * data, float * mem1, float * mem2, float * a,
    float * b, float * window, float * datai, float * freqTable, float * notePitchTable, 
-   char ** noteNameTable, void * fft, float * score, float * accuracy){
+   char ** noteNameTable, void * fft, float * scorep, int * numAccuratep){
 
    char prevNote[3];
    prevNote[0] = '\n';
@@ -146,18 +149,18 @@ void listen(PaError * errp, PaStream * stream, float * data, float * mem1, float
       char * nearestNoteName = noteNameTable[maxIndex+nearestNoteDelta];
       float nearestNotePitch = notePitchTable[maxIndex+nearestNoteDelta];
       float centsSharp = 1200 * log( freq / nearestNotePitch ) / log( 2.0 );
-
-      updateInfo(score, accuracy, nearestNoteName, centsSharp);
-
-
+      updateInfo(scorep, numAccuratep, nearestNoteName, centsSharp);
       outputPitch(nearestNoteName, nearestNoteDelta, centsSharp);
    }
+   return numInputs;
 }
 
 
-//updates accuracy/score/other pitch information based on input
-void updateInfo(float * score, float * accuracy, char * nearestNoteName, float centsSharp){
-   
+//updates accuracy/score/other pitch information based on frequency input
+void updateInfo(float * scorep, int * numAccuratep, char * nearestNoteName, float centsSharp){
+   if(abs(centsSharp) < 10.0) (*numAccuratep)++; //Count it as an accurate pitch if it's "close enough"
+   float singleInputScore = 100 - abs(centsSharp);  
+   *scorep += singleInputScore;
 }
 
 
