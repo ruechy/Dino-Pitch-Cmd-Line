@@ -26,7 +26,6 @@
 #define NUM_SECONDS (20)
 
 /* -- functions declared and used here -- */
-void buildHammingWindow( float *window, int size );
 void buildHanWindow( float *window, int size );
 void applyWindow( float *window, float *data, int size );
 //a must be of length 2, and b must be of length 3
@@ -34,6 +33,15 @@ void computeSecondOrderLowPassParameters( float srate, float f, float *a, float 
 //mem must be of length 4.
 float processSecondOrderFilter( float x, float *mem, float *a, float *b );
 void signalHandler( int signum ) ;
+void waitForStart();
+void handleErrors(PaStream * stream, PaError err, void* ftt);
+void handleSignals();
+void initTables(float * mem1, float * mem2, float * freqTable, char** noteNameTable, float * notePitchTable);
+int initPortAudio(PaError * err, PaStreamParameters * inputParametersp, PaStream ** stream);
+void outputPitch(char* nearestNoteName, int nearestNoteDelta, float centsSharp);
+void listen(PaError * errp, PaStream * stream, float * data, float * mem1, float * mem2, float * a,
+   float * b, float * window, float * datai, float * freqTable, float * notePitchTable, 
+   char ** noteNameTable, void * fft);
 
 static bool running = true;
 
@@ -52,128 +60,73 @@ int main( int argc, char **argv ) {
    void * fft = NULL;
    PaStream *stream = NULL;
    PaError err = 0;
-   struct sigaction action;
 
-   // add signal listen so we know when to exit:
-   action.sa_handler = signalHandler;
-   sigemptyset (&action.sa_mask);
-   action.sa_flags = 0;
-
-   sigaction (SIGINT, &action, NULL);
-   sigaction (SIGHUP, &action, NULL);
-   sigaction (SIGTERM, &action, NULL);
-
-   // build the window, fft, etc
-/*
-   buildHanWindow( window, 30 );
-   for( int i=0; i<30; ++i ) {
-      for( int j=0; j<window[i]*50; ++j )
-         printf( "*" );
-      printf("\n");
-   }
-   exit(0);
-*/
+   handleSignals();
    buildHanWindow( window, FFT_SIZE );
    fft = initfft( FFT_EXP_SIZE );
    computeSecondOrderLowPassParameters( SAMPLE_RATE, 330, a, b );
-   mem1[0] = 0; mem1[1] = 0; mem1[2] = 0; mem1[3] = 0;
-   mem2[0] = 0; mem2[1] = 0; mem2[2] = 0; mem2[3] = 0;
-   //freq/note tables
-   for( int i=0; i<FFT_SIZE; ++i ) {
-      freqTable[i] = ( SAMPLE_RATE * i ) / (float) ( FFT_SIZE );
-   }
-   for( int i=0; i<FFT_SIZE; ++i ) {
-      noteNameTable[i] = NULL;
-      notePitchTable[i] = -1;
-   }
-   for( int i=0; i<127; ++i ) {
-      float pitch = ( 440.0 / 32.0 ) * pow( 2, (i-9.0)/12.0 ) ;
-      if( pitch > SAMPLE_RATE / 2.0 )
-         break;
-      //find the closest frequency using brute force.
-      float min = 1000000000.0;
-      int index = -1;
-      for( int j=0; j<FFT_SIZE; ++j ) {
-         if( fabsf( freqTable[j]-pitch ) < min ) {
-             min = fabsf( freqTable[j]-pitch );
-             index = j;
-         }
-      }
-      noteNameTable[index] = NOTES[i%12];
-      notePitchTable[index] = pitch;
-      //printf( "%f %d %s\n", pitch, index, noteNameTable[index] );
-   }
+   initTables(mem1, mem2, freqTable, noteNameTable, notePitchTable);
 
+   int result = initPortAudio(&err, &inputParameters, &stream);
+   if(result) goto error; //If result is non-zero, something is wrong
 
+   waitForStart();
+   listen(&err, stream, data, mem1, mem2, a, b, window, datai, freqTable, notePitchTable,
+      noteNameTable, fft);
 
-   // initialize portaudio
-   err = Pa_Initialize();
+   err = Pa_StopStream( stream );
    if( err != paNoError ) goto error;
 
-   inputParameters.device = Pa_GetDefaultInputDevice();
-   inputParameters.channelCount = 1;
-   inputParameters.sampleFormat = paFloat32;
-   inputParameters.suggestedLatency = Pa_GetDeviceInfo( inputParameters.device )->defaultHighInputLatency ;
-   inputParameters.hostApiSpecificStreamInfo = NULL;
+   // cleanup
+   destroyfft( fft );
+   Pa_Terminate();
 
-   printf( "Opening %s\n",
-           Pa_GetDeviceInfo( inputParameters.device )->name );
+   return 0;
+ error:
+   handleErrors(stream, err, fft);
+   return 1;
+}
 
-   err = Pa_OpenStream( &stream,
-                        &inputParameters,
-                        NULL, //no output
-                        SAMPLE_RATE,
-                        FFT_SIZE,
-                        paClipOff,
-                        NULL,
-                        NULL );
-   if( err != paNoError ) goto error;
+//Listens to the microphone input and outputs the nearest pitch
+void listen(PaError * errp, PaStream * stream, float * data, float * mem1, float * mem2, float * a,
+   float * b, float * window, float * datai, float * freqTable, float * notePitchTable, 
+   char ** noteNameTable, void * fft){
 
-   err = Pa_StartStream( stream );
-   if( err != paNoError ) goto error;
+   char prevNote[3];
+   prevNote[0] = '\n';
+   int numInputs = 0; //number of inputs recorded 
 
-   // this is the main loop where we listen to and
-   // process audio.
    while( running )
    {
+      numInputs++;
       // read some data
-      err = Pa_ReadStream( stream, data, FFT_SIZE );
-      if( err ) goto error; //FIXME: we don't want to err on xrun
-
-      // low-pass
-      //for( int i=0; i<FFT_SIZE; ++i )
-      //   printf( "in %f\n", data[i] );
+      *errp = Pa_ReadStream( stream, data, FFT_SIZE );
       for( int j=0; j<FFT_SIZE; ++j ) {
          data[j] = processSecondOrderFilter( data[j], mem1, a, b );
          data[j] = processSecondOrderFilter( data[j], mem2, a, b );
       }
-      // window
       applyWindow( window, data, FFT_SIZE );
 
       // do the fft
       for( int j=0; j<FFT_SIZE; ++j )
          datai[j] = 0;
       applyfft( fft, data, datai, false );
+      // char * nearestNoteName; float nearestNotePitch; float centsSharp; int nearestNoteDelta;
+      // findPeakAndNearest(&nearestNoteName, &nearestNotePitch, &centsSharp, &nearestNoteDelta, 
+      //    data, datai, freqTable, notePitchTable, noteNameTable);
 
-      //find the peak
       float maxVal = -1;
       int maxIndex = -1;
       for( int j=0; j<FFT_SIZE/2; ++j ) {
          float v = data[j] * data[j] + datai[j] * datai[j] ;
-/*
-         printf( "%d: ", j*SAMPLE_RATE/(2*FFT_SIZE) );
-         for( int i=0; i<sqrt(v)*100000000; ++i )
-            printf( "*" );
-         printf( "\n" );
-*/
          if( v > maxVal ) {
             maxVal = v;
             maxIndex = j;
          }
-      }
+      }      
       float freq = freqTable[maxIndex];
       //find the nearest note:
-      int nearestNoteDelta=0;
+      int nearestNoteDelta = 0;
       while( true ) {
          if( nearestNoteDelta < maxIndex && noteNameTable[maxIndex-nearestNoteDelta] != NULL ) {
             nearestNoteDelta = -nearestNoteDelta;
@@ -181,18 +134,22 @@ int main( int argc, char **argv ) {
          } else if( nearestNoteDelta + maxIndex < FFT_SIZE && noteNameTable[maxIndex+nearestNoteDelta] != NULL ) {
             break;
          }
-         ++nearestNoteDelta;
+         ++(nearestNoteDelta);
       }
       char * nearestNoteName = noteNameTable[maxIndex+nearestNoteDelta];
       float nearestNotePitch = notePitchTable[maxIndex+nearestNoteDelta];
       float centsSharp = 1200 * log( freq / nearestNotePitch ) / log( 2.0 );
 
-      // now output the results:
+
+      //updateScore();
+      outputPitch(nearestNoteName, nearestNoteDelta, centsSharp);
+   }
+}
+
+//Output the pitch heard and the degree of "pitchiness"
+void outputPitch(char* nearestNoteName, int nearestNoteDelta, float centsSharp){
       printf("\033[2J\033[1;1H"); //clear screen, go to top left
       fflush(stdout);
-
-      printf( "Tuner listening. Control-C to exit.\n" );
-      printf( "%f Hz, %d : %f\n", freq, maxIndex, maxVal*1000 );
       printf( "Nearest Note: %s\n", nearestNoteName );
       if( nearestNoteDelta != 0 ) {
          if( centsSharp > 0 )
@@ -218,16 +175,85 @@ int main( int argc, char **argv ) {
          for( int i=0; i<chars && i<centsSharp; ++i )
            printf( "=" );
       printf("\n");
-   }
-   err = Pa_StopStream( stream );
-   if( err != paNoError ) goto error;
+}
 
-   // cleanup
-   destroyfft( fft );
-   Pa_Terminate();
+//Initializes PortAudio, which is what is used to gather input/pitches from the microphone.
+//Returns 0 if initialization is successful; otherwise, returns 1
+int initPortAudio(PaError * err, PaStreamParameters * inputParametersp, PaStream ** stream){
+   *err = Pa_Initialize();
+   int error = 1;
+   if( *err != paNoError ) return error;
 
+   inputParametersp->device = Pa_GetDefaultInputDevice();
+   inputParametersp->channelCount = 1;
+   inputParametersp->sampleFormat = paFloat32;
+   inputParametersp->suggestedLatency = Pa_GetDeviceInfo( inputParametersp->device )->defaultHighInputLatency ;
+   inputParametersp->hostApiSpecificStreamInfo = NULL;
+
+   printf( "Opening %s\n",
+           Pa_GetDeviceInfo( inputParametersp->device )->name );
+
+   *err = Pa_OpenStream( stream,
+                        inputParametersp,
+                        NULL, //no output
+                        SAMPLE_RATE,
+                        FFT_SIZE,
+                        paClipOff,
+                        NULL,
+                        NULL );
+   if( *err != paNoError ) return error;
+
+   *err = Pa_StartStream( *stream );
+   if( *err != paNoError ) return error;
    return 0;
- error:
+}
+
+//Initialize values in frequency and note tables
+void initTables(float * mem1, float * mem2, float * freqTable, char** noteNameTable, float * notePitchTable){
+   mem1[0] = 0; mem1[1] = 0; mem1[2] = 0; mem1[3] = 0;
+   mem2[0] = 0; mem2[1] = 0; mem2[2] = 0; mem2[3] = 0;
+
+   for( int i=0; i<FFT_SIZE; ++i ) {
+      freqTable[i] = ( SAMPLE_RATE * i ) / (float) ( FFT_SIZE );
+   }
+   for( int i=0; i<FFT_SIZE; ++i ) {
+      noteNameTable[i] = NULL;
+      notePitchTable[i] = -1;
+   }
+   for( int i=0; i<127; ++i ) {
+      float pitch = ( 440.0 / 32.0 ) * pow( 2, (i-9.0)/12.0 ) ;
+      if( pitch > SAMPLE_RATE / 2.0 )
+         break;
+      //find the closest frequency using brute force.
+      float min = 1000000000.0;
+      int index = -1;
+      for( int j=0; j<FFT_SIZE; ++j ) {
+         if( fabsf( freqTable[j]-pitch ) < min ) {
+             min = fabsf( freqTable[j]-pitch );
+             index = j;
+         }
+      }
+      noteNameTable[index] = NOTES[i%12];
+      notePitchTable[index] = pitch;
+      //printf( "%f %d %s\n", pitch, index, noteNameTable[index] );
+   }
+}
+
+//Set up signal handlers for correct exiting of program
+void handleSignals(){  
+   struct sigaction action;
+   // add signal listen so we know when to exit:
+   action.sa_handler = signalHandler;
+   sigemptyset (&action.sa_mask);
+   action.sa_flags = 0;
+
+   sigaction (SIGINT, &action, NULL);
+   sigaction (SIGHUP, &action, NULL);
+   sigaction (SIGTERM, &action, NULL);
+}
+
+//Prints respective error messages if something goes wrong
+void handleErrors(PaStream * stream, PaError err, void * fft){
    if( stream ) {
       Pa_AbortStream( stream );
       Pa_CloseStream( stream );
@@ -237,24 +263,32 @@ int main( int argc, char **argv ) {
    fprintf( stderr, "An error occured while using the portaudio stream\n" );
    fprintf( stderr, "Error number: %d\n", err );
    fprintf( stderr, "Error message: %s\n", Pa_GetErrorText( err ) );
-   return 1;
 }
 
-void buildHammingWindow( float *window, int size )
-{
-   for( int i=0; i<size; ++i )
-      window[i] = .54 - .46 * cos( 2 * M_PI * i / (float) size );
+//Program will not proceed until r is entered
+void waitForStart(){
+   char start = '\n';
+   printf("Enter 'r' to start recording.\n");
+   while(start != 'r'){
+      start = getchar();
+   }
 }
+
+//Creates window signal in order to reduce reading of frequencies that are not actually present
 void buildHanWindow( float *window, int size )
 {
    for( int i=0; i<size; ++i )
       window[i] = .5 * ( 1 - cos( 2 * M_PI * i / (size-1.0) ) );
 }
+
+//Multiplies audio input by window signal to reduce reading of frequencies that are not actually present
 void applyWindow( float *window, float *data, int size )
 {
    for( int i=0; i<size; ++i )
       data[i] *= window[i] ;
 }
+
+//Computes low pass parameters in order to filter out misleading higher frequencies
 void computeSecondOrderLowPassParameters( float srate, float f, float *a, float *b )
 {
    float a0;
@@ -271,6 +305,8 @@ void computeSecondOrderLowPassParameters( float srate, float f, float *a, float 
    b[1] = ( 1-cosw0) / a0;
    b[2] = b[0];
 }
+
+//Applies the low pass filter to the audio to filter out misleading higher frequencies
 float processSecondOrderFilter( float x, float *mem, float *a, float *b )
 {
     float ret = b[0] * x + b[1] * mem[0] + b[2] * mem[1]
@@ -283,4 +319,6 @@ float processSecondOrderFilter( float x, float *mem, float *a, float *b )
 
 		return ret;
 }
+
+//Stops the recording
 void signalHandler( int signum ) { running = false; }
