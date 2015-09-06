@@ -41,7 +41,11 @@ int initPortAudio(PaError * err, PaStreamParameters * inputParametersp, PaStream
 void outputPitch(char* nearestNoteName, int nearestNoteDelta, float centsSharp);
 void listen(PaError * errp, PaStream * stream, float * data, float * mem1, float * mem2, float * a,
    float * b, float * window, float * datai, float * freqTable, float * notePitchTable, 
+<<<<<<< HEAD
+   char ** noteNameTable, void * fft, float * score, float * accuracy)
+=======
    char ** noteNameTable, void * fft);
+>>>>>>> f3878514a7e81a6af6989bcc4b5b4f95d4251ccf
 
 static bool running = true;
 
@@ -70,13 +74,25 @@ int main( int argc, char **argv ) {
    int result = initPortAudio(&err, &inputParameters, &stream);
    if(result) goto error; //If result is non-zero, something is wrong
 
+<<<<<<< HEAD
+   float accuracy = 0.;
+   float score = 0.;
+   waitForStart();
+   listen(&err, stream, data, mem1, mem2, a, b, window, datai, freqTable, notePitchTable,
+      noteNameTable, fft, &score, &accuracy);
+=======
    waitForStart();
    listen(&err, stream, data, mem1, mem2, a, b, window, datai, freqTable, notePitchTable,
       noteNameTable, fft);
+>>>>>>> f3878514a7e81a6af6989bcc4b5b4f95d4251ccf
 
    err = Pa_StopStream( stream );
    if( err != paNoError ) goto error;
 
+<<<<<<< HEAD
+   printResults(accuracy, score);
+=======
+>>>>>>> f3878514a7e81a6af6989bcc4b5b4f95d4251ccf
    // cleanup
    destroyfft( fft );
    Pa_Terminate();
@@ -87,10 +103,22 @@ int main( int argc, char **argv ) {
    return 1;
 }
 
+<<<<<<< HEAD
+void printResults(float accuracy, float score){
+   printf("Accuracy: %f \n", accuracy);
+   printf("Score: %f / 100 \n", score);
+}
+
+//Listens to the microphone input and outputs the nearest pitch
+void listen(PaError * errp, PaStream * stream, float * data, float * mem1, float * mem2, float * a,
+   float * b, float * window, float * datai, float * freqTable, float * notePitchTable, 
+   char ** noteNameTable, void * fft, float * score, float * accuracy){
+=======
 //Listens to the microphone input and outputs the nearest pitch
 void listen(PaError * errp, PaStream * stream, float * data, float * mem1, float * mem2, float * a,
    float * b, float * window, float * datai, float * freqTable, float * notePitchTable, 
    char ** noteNameTable, void * fft){
+>>>>>>> f3878514a7e81a6af6989bcc4b5b4f95d4251ccf
 
    char prevNote[3];
    prevNote[0] = '\n';
@@ -111,10 +139,13 @@ void listen(PaError * errp, PaStream * stream, float * data, float * mem1, float
       for( int j=0; j<FFT_SIZE; ++j )
          datai[j] = 0;
       applyfft( fft, data, datai, false );
+<<<<<<< HEAD
+=======
       // char * nearestNoteName; float nearestNotePitch; float centsSharp; int nearestNoteDelta;
       // findPeakAndNearest(&nearestNoteName, &nearestNotePitch, &centsSharp, &nearestNoteDelta, 
       //    data, datai, freqTable, notePitchTable, noteNameTable);
 
+>>>>>>> f3878514a7e81a6af6989bcc4b5b4f95d4251ccf
       float maxVal = -1;
       int maxIndex = -1;
       for( int j=0; j<FFT_SIZE/2; ++j ) {
@@ -139,13 +170,25 @@ void listen(PaError * errp, PaStream * stream, float * data, float * mem1, float
       char * nearestNoteName = noteNameTable[maxIndex+nearestNoteDelta];
       float nearestNotePitch = notePitchTable[maxIndex+nearestNoteDelta];
       float centsSharp = 1200 * log( freq / nearestNotePitch ) / log( 2.0 );
+<<<<<<< HEAD
+      updateInfo(score, accuracy, nearestNoteName, centsSharp);
+=======
 
 
       //updateScore();
+>>>>>>> f3878514a7e81a6af6989bcc4b5b4f95d4251ccf
       outputPitch(nearestNoteName, nearestNoteDelta, centsSharp);
    }
 }
 
+<<<<<<< HEAD
+//updates accuracy/score/other pitch information based on input
+void updateInfo(float * score, float * accuracy, char * nearestNoteName, float centsSharp){
+   
+}
+
+=======
+>>>>>>> f3878514a7e81a6af6989bcc4b5b4f95d4251ccf
 //Output the pitch heard and the degree of "pitchiness"
 void outputPitch(char* nearestNoteName, int nearestNoteDelta, float centsSharp){
       printf("\033[2J\033[1;1H"); //clear screen, go to top left
@@ -312,12 +355,21 @@ float processSecondOrderFilter( float x, float *mem, float *a, float *b )
     float ret = b[0] * x + b[1] * mem[0] + b[2] * mem[1]
                          - a[0] * mem[2] - a[1] * mem[3] ;
 
+<<<<<<< HEAD
+      mem[1] = mem[0];
+      mem[0] = x;
+      mem[3] = mem[2];
+      mem[2] = ret;
+
+      return ret;
+=======
 		mem[1] = mem[0];
 		mem[0] = x;
 		mem[3] = mem[2];
 		mem[2] = ret;
 
 		return ret;
+>>>>>>> f3878514a7e81a6af6989bcc4b5b4f95d4251ccf
 }
 
 //Stops the recording
