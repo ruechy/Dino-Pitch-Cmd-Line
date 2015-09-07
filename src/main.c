@@ -24,6 +24,13 @@
 #define FFT_SIZE (8192)
 #define FFT_EXP_SIZE (13)
 #define NUM_SECONDS (20)
+#define LOW_PASS_FILTER_PARAM (330)
+#define SCORETOTAL (100)
+#define NUMNOTES (12)
+#define CENTS_SHARP_MULTIPLIER (1200)
+#define ACCURACY_THRESHOLD (10.0)
+#define MIN (1000000000.0)
+#define MISS_THRESHOLD (.5)
 
 /* -- functions declared and used here -- */
 void buildHanWindow( float *window, int size );
@@ -42,38 +49,38 @@ void outputPitch(char* nearestNoteName, int nearestNoteDelta, float centsSharp);
 int listen(PaError * errp, PaStream * stream, float * data, float * mem1, float * mem2, float * a,
    float * b, float * window, float * datai, float * freqTable, float * notePitchTable, 
    char ** noteNameTable, void * fft, float * score, int * numAccuratep);
-void updateInfo(float * scorep, int * numAccuratep, char * nearestNoteName, float centsSharp);
 void printResults(int numAccurate, float score, int numInputs);
+void initNotesPlayedArrays();
+void updateInfo(float * scorep, int * numAccuratep, int noteIndex, int prevNoteIndex, float centsSharp);
+bool printIntervals();
+bool printNotes();
 
 static bool running = true;
-
+static int playedNotes[NUMNOTES]; 
+static int missedNotes[NUMNOTES];
+static int playedIntervals[NUMNOTES][NUMNOTES]; 
+static int missedIntervals[NUMNOTES][NUMNOTES];
 static char * NOTES[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
 
 /* -- main function -- */
 int main( int argc, char **argv ) {
    PaStreamParameters inputParameters;
    float a[2], b[3], mem1[4], mem2[4];
-   float data[FFT_SIZE];
-   float datai[FFT_SIZE];
-   float window[FFT_SIZE];
-   float freqTable[FFT_SIZE];
-   char * noteNameTable[FFT_SIZE];
-   float notePitchTable[FFT_SIZE];
+   float data[FFT_SIZE], datai[FFT_SIZE], window[FFT_SIZE], freqTable[FFT_SIZE], notePitchTable[FFT_SIZE];
+   char * noteNameTable[FFT_SIZE]; 
    void * fft = NULL;
    PaStream *stream = NULL;
    PaError err = 0;
-
+   int numAccurate = 0; 
+   float score = 0.;
+   initNotesPlayedArrays();
    handleSignals();
    buildHanWindow( window, FFT_SIZE );
    fft = initfft( FFT_EXP_SIZE );
-   computeSecondOrderLowPassParameters( SAMPLE_RATE, 330, a, b );
+   computeSecondOrderLowPassParameters( SAMPLE_RATE, LOW_PASS_FILTER_PARAM, a, b );
    initTables(mem1, mem2, freqTable, noteNameTable, notePitchTable);
-
    int result = initPortAudio(&err, &inputParameters, &stream);
    if(result) goto error; //If result is non-zero, something is wrong
-
-   int numAccurate = 0;
-   float score = 0.;
    waitForStart();
    int numInputs = listen(&err, stream, data, mem1, mem2, a, b, window, datai, freqTable, notePitchTable,
       noteNameTable, fft, &score, &numAccurate);
@@ -93,11 +100,70 @@ int main( int argc, char **argv ) {
    return 1;
 }
 
+//Prints the names of the notes that the user missed more than a specified percentage of the time. Returns true
+//if there are no frequently missed notes.
+bool printNotes(){
+   bool perfect = true; //no missed notes
+   printf("Problem notes:\n");
+   for(int i = 0; i < NUMNOTES; i++){
+      if(playedNotes[i]){
+         float missed = (float) missedNotes[i] / playedNotes[i];
+         if(missed > MISS_THRESHOLD){
+            //print integer instead of float; integer is precise enough for this purpose
+            printf("%s (missed %d %% of the time)\n", NOTES[i], (int)missed * SCORETOTAL);
+            perfect = false;
+         } 
+      }
+   }
+   return perfect;
+}
 
+//Prints the interval jumps that the user missed more than a specified percentage of the time. Returns true
+//if there are no frequently missed intervals.
+bool printIntervals(){
+   bool perfect = true; //no missed intervals
+   printf("Problem intervals:\n");
+    for(int i = 0; i < NUMNOTES; i++){
+      for(int j = 0; j < NUMNOTES; j++){
+         if(playedIntervals[i][j]){
+            float missed = (float) missedIntervals[i][j] / playedIntervals[i][j];
+            if(missed > MISS_THRESHOLD){
+               //print integer instead of float; integer is precise enough for this purpose
+               printf("%s -> %s (missed %d %% of the time)\n", NOTES[i], NOTES[j], (int)missed * SCORETOTAL); 
+               perfect = false;
+            } 
+         }
+      }
+   }
+   return perfect;
+}
+
+//Prints the pitch results of the recording: 
 void printResults(int numAccurate, float score, int numInputs){
-   float percentAccurate = ((numAccurate * 1.0 )/numInputs) * 100;
-   printf("Percent accurate: %f %% \n", percentAccurate);
-   printf("Precision Score: %f / 100 \n", (score/numInputs));
+   if(numInputs == 0){ //ensures no division by 0 is attempted
+      printf("No inputs recorded. \n");
+   } else {
+      float percentAccurate = (((float) numAccurate)/numInputs) * SCORETOTAL;
+      printf("Percent accurate: %d %% \n", (int)percentAccurate); //print integer instead of float; integer is precise enough for this purpose
+      printf("\n");
+      printf("Precision Score: %d / 100 \n", (int)(score/numInputs)); //print integer instead of float; integer is precise enough for this purpose
+   }
+   printf("\n");
+   if(printNotes()) printf("None! Nice job! :D \n"); //if this is true, it means the user didn't frequently miss any notes
+   printf("\n");
+   if(printIntervals()) printf("None! Nice job! :D \n"); //if this is true, it means the user didn't frequently miss any intervals
+}
+
+//Initializes the number of each note/interval played/missed to 0
+void initNotesPlayedArrays(){
+   for(int i = 0; i < NUMNOTES; i++){
+      playedNotes[i] = 0;
+      missedNotes[i] = 0;
+      for(int j = 0; j < NUMNOTES; j++){
+         playedIntervals[i][j] = 0;
+         missedIntervals[i][j] = 0;
+      }
+   }
 }
 
 //Listens to the microphone input and outputs the nearest pitch; returns number of inputs recorded
@@ -105,12 +171,9 @@ int listen(PaError * errp, PaStream * stream, float * data, float * mem1, float 
    float * b, float * window, float * datai, float * freqTable, float * notePitchTable, 
    char ** noteNameTable, void * fft, float * scorep, int * numAccuratep){
 
-   char prevNote[3];
-   prevNote[0] = '\n';
+   int prevNoteIndex = -1; //Initialize the previous note index to -1 so it is not accessed on the first iteration
    int numInputs = 0; //number of inputs recorded 
-
-   while( running )
-   {
+   while( running ) {
       numInputs++;
       // read some data
       *errp = Pa_ReadStream( stream, data, FFT_SIZE );
@@ -148,19 +211,32 @@ int listen(PaError * errp, PaStream * stream, float * data, float * mem1, float 
       }
       char * nearestNoteName = noteNameTable[maxIndex+nearestNoteDelta];
       float nearestNotePitch = notePitchTable[maxIndex+nearestNoteDelta];
-      float centsSharp = 1200 * log( freq / nearestNotePitch ) / log( 2.0 );
-      updateInfo(scorep, numAccuratep, nearestNoteName, centsSharp);
+      float centsSharp = CENTS_SHARP_MULTIPLIER * log( freq / nearestNotePitch ) / log( 2.0 );
+      updateInfo(scorep, numAccuratep, (maxIndex+nearestNoteDelta) % NUMNOTES, prevNoteIndex, centsSharp);
       outputPitch(nearestNoteName, nearestNoteDelta, centsSharp);
+      prevNoteIndex = (maxIndex+nearestNoteDelta) % NUMNOTES;
    }
    return numInputs;
 }
 
 
 //updates accuracy/score/other pitch information based on frequency input
-void updateInfo(float * scorep, int * numAccuratep, char * nearestNoteName, float centsSharp){
-   if(abs(centsSharp) < 10.0) (*numAccuratep)++; //Count it as an accurate pitch if it's "close enough"
-   float singleInputScore = 100 - abs(centsSharp);  
+void updateInfo(float * scorep, int * numAccuratep, int noteIndex, int prevNoteIndex, float centsSharp){
+   playedNotes[noteIndex]++;
+   if(prevNoteIndex != -1 && prevNoteIndex != noteIndex){ //if it's not the first note or the same note
+      playedIntervals[prevNoteIndex][noteIndex]++;
+   }
+   if(fabsf(centsSharp) < ACCURACY_THRESHOLD){
+      (*numAccuratep)++; //Count it as an accurate pitch if it's "close enough" in the range of the accuracy threshold
+   } else {
+      missedNotes[noteIndex]++;
+      if(prevNoteIndex != -1 && prevNoteIndex != noteIndex){ //if it's not the first note or the same note
+         missedIntervals[prevNoteIndex][noteIndex]++;
+      }
+   }
+   float singleInputScore = SCORETOTAL - fabsf(centsSharp);  
    *scorep += singleInputScore;
+
 }
 
 
@@ -243,7 +319,7 @@ void initTables(float * mem1, float * mem2, float * freqTable, char** noteNameTa
       if( pitch > SAMPLE_RATE / 2.0 )
          break;
       //find the closest frequency using brute force.
-      float min = 1000000000.0;
+      float min = MIN;
       int index = -1;
       for( int j=0; j<FFT_SIZE; ++j ) {
          if( fabsf( freqTable[j]-pitch ) < min ) {
@@ -251,9 +327,8 @@ void initTables(float * mem1, float * mem2, float * freqTable, char** noteNameTa
              index = j;
          }
       }
-      noteNameTable[index] = NOTES[i%12];
+      noteNameTable[index] = NOTES[i% NUMNOTES];
       notePitchTable[index] = pitch;
-      //printf( "%f %d %s\n", pitch, index, noteNameTable[index] );
    }
 }
 
@@ -270,7 +345,7 @@ void handleSignals(){
    sigaction (SIGTERM, &action, NULL);
 }
 
-//Prints respective error messages if something goes wrong
+//]s respective error messages if something goes wrong
 void handleErrors(PaStream * stream, PaError err, void * fft){
    if( stream ) {
       Pa_AbortStream( stream );
