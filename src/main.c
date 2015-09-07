@@ -31,6 +31,9 @@
 #define ACCURACY_THRESHOLD (10.0)
 #define MIN (1000000000.0)
 #define MISS_THRESHOLD (.5)
+#define NUMOCTAVES (8)
+#define OCTAVE_ONE_START (31.7855) //halfway between B0 and C1
+#define OCTAVE_EIGHT_END (8137.075) //halway between B8 and C9
 
 /* -- functions declared and used here -- */
 void buildHanWindow( float *window, int size );
@@ -51,15 +54,15 @@ int listen(PaError * errp, PaStream * stream, float * data, float * mem1, float 
    char ** noteNameTable, void * fft, float * score, int * numAccuratep);
 void printResults(int numAccurate, float score, int numInputs);
 void initNotesPlayedArrays();
-void updateInfo(float * scorep, int * numAccuratep, int noteIndex, int prevNoteIndex, float centsSharp);
+void updateInfo(float * scorep, int * numAccuratep, int noteIndex, int prevNoteIndex, float centsSharp, float freq);
 bool printIntervals();
 bool printNotes();
 
 static bool running = true;
-static int playedNotes[NUMNOTES]; 
-static int missedNotes[NUMNOTES];
-static int playedIntervals[NUMNOTES][NUMNOTES]; 
-static int missedIntervals[NUMNOTES][NUMNOTES];
+static int playedNotes[NUMNOTES * NUMOCTAVES]; 
+static int missedNotes[NUMNOTES * NUMOCTAVES];
+static int playedIntervals[NUMNOTES * NUMOCTAVES][NUMNOTES * NUMOCTAVES]; 
+static int missedIntervals[NUMNOTES * NUMOCTAVES][NUMNOTES * NUMOCTAVES];
 static char * NOTES[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
 
 /* -- main function -- */
@@ -105,12 +108,13 @@ int main( int argc, char **argv ) {
 bool printNotes(){
    bool perfect = true; //no missed notes
    printf("Problem notes:\n");
-   for(int i = 0; i < NUMNOTES; i++){
+   for(int i = 0; i < NUMNOTES * NUMOCTAVES; i++){
       if(playedNotes[i]){
          float missed = (float) missedNotes[i] / playedNotes[i];
          if(missed > MISS_THRESHOLD){
             //print integer instead of float; integer is precise enough for this purpose
-            printf("%s (missed %d %% of the time)\n", NOTES[i], (int)missed * SCORETOTAL);
+            printf("%s%d (missed %d %% of the time)\n", NOTES[i % NUMNOTES], 
+               (i / NUMOCTAVES) + 1, (int)(missed * SCORETOTAL));
             perfect = false;
          } 
       }
@@ -123,13 +127,14 @@ bool printNotes(){
 bool printIntervals(){
    bool perfect = true; //no missed intervals
    printf("Problem intervals:\n");
-    for(int i = 0; i < NUMNOTES; i++){
-      for(int j = 0; j < NUMNOTES; j++){
+    for(int i = 0; i < NUMNOTES * NUMOCTAVES; i++){
+      for(int j = 0; j < NUMNOTES * NUMOCTAVES; j++){
          if(playedIntervals[i][j]){
             float missed = (float) missedIntervals[i][j] / playedIntervals[i][j];
             if(missed > MISS_THRESHOLD){
                //print integer instead of float; integer is precise enough for this purpose
-               printf("%s -> %s (missed %d %% of the time)\n", NOTES[i], NOTES[j], (int)missed * SCORETOTAL); 
+               printf("%s%d -> %s%d (missed %d %% of the time)\n", NOTES[i % NUMNOTES], 
+                  (i / NUMOCTAVES) + 1, NOTES[j % NUMNOTES], (j / NUMOCTAVES) + 1, (int)(missed * SCORETOTAL)); 
                perfect = false;
             } 
          }
@@ -212,7 +217,9 @@ int listen(PaError * errp, PaStream * stream, float * data, float * mem1, float 
       char * nearestNoteName = noteNameTable[maxIndex+nearestNoteDelta];
       float nearestNotePitch = notePitchTable[maxIndex+nearestNoteDelta];
       float centsSharp = CENTS_SHARP_MULTIPLIER * log( freq / nearestNotePitch ) / log( 2.0 );
-      updateInfo(scorep, numAccuratep, (maxIndex+nearestNoteDelta) % NUMNOTES, prevNoteIndex, centsSharp);
+      updateInfo(scorep, numAccuratep, (maxIndex+nearestNoteDelta) % NUMNOTES, prevNoteIndex, centsSharp, freq);
+      int octave = (log(freq/OCTAVE_ONE_START)/log(2.0)) + 1; //converts from Hz to octave
+      printf("%d\n", octave);
       outputPitch(nearestNoteName, nearestNoteDelta, centsSharp);
       prevNoteIndex = (maxIndex+nearestNoteDelta) % NUMNOTES;
    }
@@ -221,16 +228,20 @@ int listen(PaError * errp, PaStream * stream, float * data, float * mem1, float 
 
 
 //updates accuracy/score/other pitch information based on frequency input
-void updateInfo(float * scorep, int * numAccuratep, int noteIndex, int prevNoteIndex, float centsSharp){
+void updateInfo(float * scorep, int * numAccuratep, int noteIndex, int prevNoteIndex, float centsSharp, float freq){
+   if(freq < OCTAVE_ONE_START || freq > OCTAVE_EIGHT_END) return; //return if outside of the span of the 8 octaves
+   int octave = (log(freq/OCTAVE_ONE_START)/log(2.0)) + 1; //converts from Hz to octave
+   prevNoteIndex *= octave; //puts note in respective octave
+   noteIndex *= octave;
    playedNotes[noteIndex]++;
-   if(prevNoteIndex != -1 && prevNoteIndex != noteIndex){ //if it's not the first note or the same note
+   if(prevNoteIndex > 0 && prevNoteIndex != noteIndex){ //if it's not the first note or the same note
       playedIntervals[prevNoteIndex][noteIndex]++;
    }
    if(fabsf(centsSharp) < ACCURACY_THRESHOLD){
       (*numAccuratep)++; //Count it as an accurate pitch if it's "close enough" in the range of the accuracy threshold
    } else {
       missedNotes[noteIndex]++;
-      if(prevNoteIndex != -1 && prevNoteIndex != noteIndex){ //if it's not the first note or the same note
+      if(prevNoteIndex > 0 && prevNoteIndex != noteIndex){ //if it's not the first note or the same note
          missedIntervals[prevNoteIndex][noteIndex]++;
       }
    }
@@ -242,7 +253,7 @@ void updateInfo(float * scorep, int * numAccuratep, int noteIndex, int prevNoteI
 
 //Output the pitch heard and the degree of "pitchiness"
 void outputPitch(char* nearestNoteName, int nearestNoteDelta, float centsSharp){
-      printf("\033[2J\033[1;1H"); //clear screen, go to top left
+     printf("\033[2J\033[1;1H"); //clear screen, go to top left
       fflush(stdout);
       printf( "Nearest Note: %s\n", nearestNoteName );
       if( nearestNoteDelta != 0 ) {
