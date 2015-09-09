@@ -1,3 +1,6 @@
+
+Built on top of a command line guitar tuner (see info about it below) to make a program to aid musicians with hitting pitches more accurately. The program takes microphone input and scores the user based on pitch accuracy. Two scores are generated--one operates on a "hit or miss" basis; the other gives points based on degree of sharpness or flatness. The program also provides information on "problem" notes (notes that the user tends to miss) and "problem" intervals (intervals that cause the user to miss notes).
+
 guitartuner
 ===========
 
