@@ -54,9 +54,10 @@ int listen(PaError * errp, PaStream * stream, float * data, float * mem1, float 
    char ** noteNameTable, void * fft, float * score, int * numAccuratep);
 void printResults(int numAccurate, float score, int numInputs);
 void initNotesPlayedArrays();
-void updateInfo(float * scorep, int * numAccuratep, int noteIndex, int prevNoteIndex, float centsSharp, float freq);
+void updateInfo(float * scorep, int * numAccuratep, int unOctavedNoteIndex, int * prevNoteIndex, float centsSharp, float freq);
 bool printIntervals();
 bool printNotes();
+int findNoteIndex(char * noteName);
 
 static bool running = true;
 static int playedNotes[NUMNOTES * NUMOCTAVES]; 
@@ -103,6 +104,14 @@ int main( int argc, char **argv ) {
    return 1;
 }
 
+//Finds the index of the note name in the note array
+int findNoteIndex(char * noteName){
+    for(int i = 0; i < NUMNOTES; i++){
+        if(noteName == NOTES[i]) return i;
+    }
+    return -1;
+}
+
 //Prints the names of the notes that the user missed more than a specified percentage of the time. Returns true
 //if there are no frequently missed notes.
 bool printNotes(){
@@ -114,7 +123,7 @@ bool printNotes(){
          if(missed > MISS_THRESHOLD){
             //print integer instead of float; integer is precise enough for this purpose
             printf("%s%d (missed %d %% of the time)\n", NOTES[i % NUMNOTES], 
-               (i / NUMOCTAVES) + 1, (int)(missed * SCORETOTAL));
+               (i / NUMNOTES) + 1, (int)(missed * SCORETOTAL));
             perfect = false;
          } 
       }
@@ -134,7 +143,7 @@ bool printIntervals(){
             if(missed > MISS_THRESHOLD){
                //print integer instead of float; integer is precise enough for this purpose
                printf("%s%d -> %s%d (missed %d %% of the time)\n", NOTES[i % NUMNOTES], 
-                  (i / NUMOCTAVES) + 1, NOTES[j % NUMNOTES], (j / NUMOCTAVES) + 1, (int)(missed * SCORETOTAL)); 
+                  (i / NUMNOTES) + 1, NOTES[j % NUMNOTES], (j / NUMNOTES) + 1, (int)(missed * SCORETOTAL)); 
                perfect = false;
             } 
          }
@@ -217,22 +226,21 @@ int listen(PaError * errp, PaStream * stream, float * data, float * mem1, float 
       char * nearestNoteName = noteNameTable[maxIndex+nearestNoteDelta];
       float nearestNotePitch = notePitchTable[maxIndex+nearestNoteDelta];
       float centsSharp = CENTS_SHARP_MULTIPLIER * log( freq / nearestNotePitch ) / log( 2.0 );
-      updateInfo(scorep, numAccuratep, (maxIndex+nearestNoteDelta) % NUMNOTES, prevNoteIndex, centsSharp, freq);
-      int octave = (log(freq/OCTAVE_ONE_START)/log(2.0)) + 1; //converts from Hz to octave
-      printf("%d\n", octave);
+      int unOctavedNoteIndex = findNoteIndex(nearestNoteName);
+      updateInfo(scorep, numAccuratep, unOctavedNoteIndex, &prevNoteIndex, centsSharp, freq);
       outputPitch(nearestNoteName, nearestNoteDelta, centsSharp);
-      prevNoteIndex = (maxIndex+nearestNoteDelta) % NUMNOTES;
+      
    }
    return numInputs;
 }
 
 
 //updates accuracy/score/other pitch information based on frequency input
-void updateInfo(float * scorep, int * numAccuratep, int noteIndex, int prevNoteIndex, float centsSharp, float freq){
+void updateInfo(float * scorep, int * numAccuratep, int unOctavedNoteIndex, int * prevNoteIndexp, float centsSharp, float freq){
    if(freq < OCTAVE_ONE_START || freq > OCTAVE_EIGHT_END) return; //return if outside of the span of the 8 octaves
    int octave = (log(freq/OCTAVE_ONE_START)/log(2.0)) + 1; //converts from Hz to octave
-   prevNoteIndex *= octave; //puts note in respective octave
-   noteIndex *= octave;
+   int noteIndex = unOctavedNoteIndex + (octave * NUMNOTES); //puts note in respective octave
+   int prevNoteIndex = *prevNoteIndexp;
    playedNotes[noteIndex]++;
    if(prevNoteIndex > 0 && prevNoteIndex != noteIndex){ //if it's not the first note or the same note
       playedIntervals[prevNoteIndex][noteIndex]++;
@@ -247,7 +255,7 @@ void updateInfo(float * scorep, int * numAccuratep, int noteIndex, int prevNoteI
    }
    float singleInputScore = SCORETOTAL - fabsf(centsSharp);  
    *scorep += singleInputScore;
-
+   *prevNoteIndexp = noteIndex;
 }
 
 
@@ -255,7 +263,7 @@ void updateInfo(float * scorep, int * numAccuratep, int noteIndex, int prevNoteI
 void outputPitch(char* nearestNoteName, int nearestNoteDelta, float centsSharp){
      printf("\033[2J\033[1;1H"); //clear screen, go to top left
       fflush(stdout);
-      printf( "Nearest Note: %s\n", nearestNoteName );
+      printf( "Ctrl+C for results. Nearest Note: %s\n", nearestNoteName );
       if( nearestNoteDelta != 0 ) {
          if( centsSharp > 0 )
             printf( "%f cents sharp.\n", centsSharp );
